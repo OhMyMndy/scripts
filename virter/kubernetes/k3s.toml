@@ -1,0 +1,52 @@
+# virter vm image pull alma-9
+# virter vm run --name k3s --id 3 --provision virter/kubernetes/k3s.toml  --vcpus 4 --memory 2G alma-9
+# virter vm exec k3s --provision virter/kubernetes/k3s.toml
+version = 1
+
+[[steps]]
+[steps.shell]
+script = '''
+systemctl disable firewalld --now
+
+if ! command -v k3s; then
+  curl -sfL https://get.k3s.io | K3S_KUBECONFIG_MODE="644" INSTALL_K3S_EXEC="--flannel-backend none --disable-network-policy" sh -s -
+fi
+
+
+if ! command -v cilium; then
+  CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+  CLI_ARCH=amd64
+  if [ "$(uname -m)" = "aarch64" ]; then CLI_ARCH=arm64; fi
+  curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+  sha256sum --check cilium-linux-${CLI_ARCH}.tar.gz.sha256sum
+  sudo tar xzvfC cilium-linux-${CLI_ARCH}.tar.gz /usr/local/bin
+  rm cilium-linux-${CLI_ARCH}.tar.gz{,.sha256sum}
+fi
+
+if ! command -v helm; then
+  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
+if ! command -v karmor; then
+  curl -sfL http://get.kubearmor.io/ | sudo sh -s -- -b /usr/local/bin
+fi
+
+
+helm repo add kubearmor https://kubearmor.github.io/charts
+helm repo update kubearmor
+
+
+mkdir -p ~/.kube && cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+
+chown $USER:$USER ~/.kube/config
+
+kubectl wait --for=condition=ready pod --all --namespace=kube-system --timeout=600s
+
+
+cilium install
+
+
+helm upgrade --install kubearmor-operator kubearmor/kubearmor-operator -n kubearmor --create-namespace --wait
+kubectl apply -f https://raw.githubusercontent.com/kubearmor/KubeArmor/main/pkg/KubeArmorOperator/config/samples/sample-config.yml
+
+'''
